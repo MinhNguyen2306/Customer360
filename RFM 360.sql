@@ -1,10 +1,19 @@
 
-SELECT *,
-    row_number() over (ORDER BY Recency ASC) as rn_recency,
-    row_number() over (ORDER BY Frequency ASC) as rn_frequency,
-    row_number() over (ORDER BY Duration ASC) as rn_duration
-INTO #customer_statistics
-FROM res
+select customerid, 
+       max(Purchase_Date) as latest_purchase_date,
+       datediff(year, min(created_date), '2022-09-01') as contract_age,
+       datediff(day, max(Purchase_Date), '2022-09-01') as recency,
+       1.0 * count(*) / nullif(datediff(year, min(created_date), '2022-09-01'), 0) as frequency,
+       1.0 * sum(GMV) / nullif(datediff(year, min(created_date), '2022-09-01'), 0) as monetary,
+       row_number() over (order by datediff(day, max(Purchase_Date), '2022-09-01') asc) as rn_recency,
+       row_number() over (order by 1.0 * count(*) / nullif(datediff(year, min(created_date), '2022-09-01'), 0) asc) as rn_frequency,
+       row_number() over (order by 1.0 * sum(GMV) / nullif(datediff(year, min(created_date), '2022-09-01'), 0) asc) as rn_monetary
+into #customer_statistics
+from customer_transaction ct
+join Customer_Registered cr 
+on ct.customerid = cr.ID
+where customerid != 0
+group by customerID;
 
 
 ;WITH 
@@ -33,43 +42,40 @@ IQR_M AS (
     FROM #customer_statistics
 )
 
-, final_rfm AS (
-    SELECT 
-        cs.MAC,
-        cs.Recency, 
-        cs.Frequency, 
-        cs.Duration,
-
-        -- Recency: Giá trị nhỏ là tốt hơn → R cao hơn
-        CASE
-            WHEN cs.Recency >= r.min_r AND cs.Recency < r.q1_r THEN '4'
-            WHEN cs.Recency >= r.q1_r AND cs.Recency < r.q2_r THEN '3'
-            WHEN cs.Recency >= r.q2_r AND cs.Recency < r.q3_r THEN '2'
-            ELSE '1'
-        END AS R,
-
-        -- Frequency: Giá trị lớn là tốt hơn → F cao hơn
-        CASE
-            WHEN cs.Frequency >= f.min_f AND cs.Frequency < f.q1_f THEN '1'
-            WHEN cs.Frequency >= f.q1_f AND cs.Frequency < f.q2_f THEN '2'
-            WHEN cs.Frequency >= f.q2_f AND cs.Frequency < f.q3_f THEN '3'
-            ELSE '4'
-        END AS F,
-
-        -- Duration: Giá trị lớn là tốt hơn → M cao hơn
-        CASE
-            WHEN cs.Duration >= m.min_m AND cs.Duration < m.q1_m THEN '1'
-            WHEN cs.Duration >= m.q1_m AND cs.Duration < m.q2_m THEN '2'
-            WHEN cs.Duration >= m.q2_m AND cs.Duration < m.q3_m THEN '3'
-            ELSE '4'
-        END AS M
-
-    FROM #customer_statistics cs
-    CROSS JOIN IQR_R r
-    CROSS JOIN IQR_F f
-    CROSS JOIN IQR_M m
+, RFM as (
+    select 
+        cs.customerid,
+        cs.recency, cs.frequency, cs.monetary,
+        case
+            when cs.recency >= r.min_r and cs.recency < r.q1_r then '4'
+            when cs.recency >= r.q1_r and cs.recency < r.q2_r then '3'
+            when cs.recency >= r.q2_r and cs.recency < r.q3_r then '2'
+            else '1'
+        end as R,
+        case
+            when cs.frequency >= f.min_f and cs.frequency < f.q1_f then '1'
+            when cs.frequency >= f.q1_f and cs.frequency < f.q2_f then '2'
+            when cs.frequency >= f.q2_f and cs.frequency < f.q3_f then '3'
+            else '4'
+        end as F,
+        case
+            when cs.monetary >= m.min_m and cs.monetary < m.q1_m then '1'
+            when cs.monetary >= m.q1_m and cs.monetary < m.q2_m then '2'
+            when cs.monetary >= m.q2_m and cs.monetary < m.q3_m then '3'
+            else '4'
+        end as M
+    from #customer_statistics cs
+    cross join IQR_R r
+    cross join IQR_F f
+    cross join IQR_M m
 )
 
-SELECT *,
-       R + F + M AS RFM_Score
-FROM final_rfm 
+-- Step 4: Trả kết quả cuối cùng, có cột RFM_Score (nối các giá trị R, F, M)
+select
+    customerid,
+    recency,
+    frequency,
+    monetary,
+    R, F, M,
+    R + F + M as RFM_Score 
+from final_rfm
